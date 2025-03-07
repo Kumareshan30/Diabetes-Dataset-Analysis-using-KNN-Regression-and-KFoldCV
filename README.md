@@ -11,7 +11,7 @@ Additionally, the notebook includes:
 - **Comparison with Baseline Models**: Assessing how KNN performs compared to simple mean predictions.
 
 ## Folder Structure
-Machine Learning Project 1 - KNN Regression/
+KNN Regression with K-Fold Cross Validation/
       
    ├── KNN_regression_KFoldCV.ipynb  # Jupyter Notebook implementing KNN regression with K-Fold CV
    
