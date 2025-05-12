@@ -1,23 +1,24 @@
 """
-Refactored KNN Regression with Cross-Validation
-- Implements a custom KNN regressor
-- Provides K‑fold cross-validation evaluation
-- Nested cross-validation for automatic K selection
-- Clear function/module structure
+Streamlit Dashboard: KNN Regression Model Complexity & Selection
+- Custom KNN regressor
+- Cross-validation analysis (train vs. test error)
+- Automatic k selection via internal CV
 """
 
+import streamlit as st
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.datasets import load_diabetes
 from sklearn.metrics import mean_squared_error
-from sklearn.neighbors import KDTree, KNeighborsRegressor
+from sklearn.neighbors import KDTree
 from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.model_selection import KFold as SklearnKFold, train_test_split
 
 
 class KnnRegressor:
     """
-    Custom K-Nearest Neighbors Regressor using KDTree for efficient neighbor search.
+    Custom KNN regressor using KDTree for neighbor search.
     """
     def __init__(self, k: int = 5):
         self.k = k
@@ -30,127 +31,120 @@ class KnnRegressor:
         return self
 
     def predict(self, X: np.ndarray) -> np.ndarray:
-        if self.tree is None:
-            raise ValueError("Model has not been fitted yet.")
         _, idx = self.tree.query(X, k=self.k)
-        neighbour_vals = self.y_train[idx]
-        return neighbour_vals.mean(axis=1)
+        return self.y_train[idx].mean(axis=1)
 
 
 class KnnRegressorCV(BaseEstimator, RegressorMixin):
     """
-    KNN Regressor with internal cross-validation to select optimal k.
+    KNN with internal CV to choose best k from candidates.
     """
-    def __init__(self, ks: list = None, cv_splits: int = 5, random_state: int = None):
+    def __init__(self, ks=None, cv_splits=5, random_state=None):
         self.ks = ks or list(range(1, 21))
         self.cv_splits = cv_splits
         self.random_state = random_state
         self.best_k_ = None
         self.model_ = None
 
-    def fit(self, X: np.ndarray, y: np.ndarray):
+    def fit(self, X, y):
         cv = SklearnKFold(n_splits=self.cv_splits, shuffle=True, random_state=self.random_state)
         best_score = np.inf
-
         for k in self.ks:
-            fold_errors = []
+            errs = []
             for train_idx, val_idx in cv.split(X):
-                knn = KnnRegressor(k)
-                knn.fit(X[train_idx], y[train_idx])
-                y_pred = knn.predict(X[val_idx])
-                fold_errors.append(mean_squared_error(y[val_idx], y_pred))
-
-            mean_error = np.mean(fold_errors)
-            if mean_error < best_score:
-                best_score, self.best_k_ = mean_error, k
-
-        # Final model with best k
+                knn = KnnRegressor(k).fit(X[train_idx], y[train_idx])
+                errs.append(mean_squared_error(y[val_idx], knn.predict(X[val_idx])))
+            avg_err = np.mean(errs)
+            if avg_err < best_score:
+                best_score, self.best_k_ = avg_err, k
         self.model_ = KnnRegressor(self.best_k_).fit(X, y)
         return self
 
-    def predict(self, X: np.ndarray) -> np.ndarray:
-        if self.model_ is None:
-            raise ValueError("Model not fitted. Call fit() first.")
+    def predict(self, X):
         return self.model_.predict(X)
 
 
-def evaluate_knn_range(
-    X: np.ndarray,
-    y: np.ndarray,
-    k_values: list,
-    cv_splits: int = 5,
-    random_state: int = None
-) -> dict:
+def evaluate_knn_range(X, y, k_values, cv_splits=5, random_state=None):
     """
-    Evaluate KNN for a range of k using cross-validation.
-    Returns a dict with mean/std of train/test MSE for each k.
+    Returns DataFrame: columns=[k, mean_train, mean_test, std_train, std_test]
     """
-    results = {k: {'train_err': [], 'test_err': []} for k in k_values}
+    records = []
     cv = SklearnKFold(n_splits=cv_splits, shuffle=True, random_state=random_state)
-
     for k in k_values:
+        train_errs, test_errs = [], []
         for train_idx, test_idx in cv.split(X):
             knn = KnnRegressor(k).fit(X[train_idx], y[train_idx])
-            y_train_pred = knn.predict(X[train_idx])
-            y_test_pred = knn.predict(X[test_idx])
-            results[k]['train_err'].append(mean_squared_error(y[train_idx], y_train_pred))
-            results[k]['test_err'].append(mean_squared_error(y[test_idx], y_test_pred))
-
-    summary = {}
-    for k, errs in results.items():
-        summary[k] = {
-            'mean_train': np.mean(errs['train_err']),
-            'mean_test': np.mean(errs['test_err']),
-            'std_train': np.std(errs['train_err']),
-            'std_test': np.std(errs['test_err']),
-        }
-    return summary
+            train_errs.append(mean_squared_error(y[train_idx], knn.predict(X[train_idx])))
+            test_errs.append(mean_squared_error(y[test_idx], knn.predict(X[test_idx])))
+        records.append({
+            'k': k,
+            'mean_train': np.mean(train_errs),
+            'mean_test': np.mean(test_errs),
+            'std_train': np.std(train_errs),
+            'std_test': np.std(test_errs),
+        })
+    return pd.DataFrame.from_records(records)
 
 
-def plot_cv_results(summary: dict):
+def plot_cv_results(df_cv):
     """
-    Plot mean training and test errors with 95% confidence intervals.
+    Returns a Matplotlib Figure of errors vs k with 95% CI.
     """
-    ks = sorted(summary)
-    means_train = [summary[k]['mean_train'] for k in ks]
-    means_test = [summary[k]['mean_test'] for k in ks]
-    errs_train = [1.96 * summary[k]['std_train'] / np.sqrt(summary[k]['std_train'].size) for k in ks]
-    errs_test = [1.96 * summary[k]['std_test'] / np.sqrt(summary[k]['std_test'].size) for k in ks]
-
-    plt.figure(figsize=(10, 5))
-    plt.errorbar(ks, means_train, yerr=errs_train, label='Train MSE', fmt='-o', capsize=3)
-    plt.errorbar(ks, means_test, yerr=errs_test, label='Test MSE', fmt='-s', capsize=3)
-    plt.xlabel('k (neighbors)')
-    plt.ylabel('Mean Squared Error')
-    plt.title('KNN CV: Train vs Test Error')
-    plt.legend()
-    plt.grid(True)
-    plt.show()
+    ks = df_cv['k']
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ci_train = 1.96 * df_cv['std_train'] / np.sqrt(df_cv.shape[0])
+    ci_test = 1.96 * df_cv['std_test'] / np.sqrt(df_cv.shape[0])
+    ax.errorbar(ks, df_cv['mean_train'], yerr=ci_train, label='Train MSE', fmt='-o', capsize=3)
+    ax.errorbar(ks, df_cv['mean_test'], yerr=ci_test, label='Test MSE', fmt='-s', capsize=3)
+    ax.set_xlabel('k (neighbors)')
+    ax.set_ylabel('MSE')
+    ax.set_title('KNN CV: Train vs Test Error')
+    ax.legend()
+    ax.grid(True)
+    return fig
 
 
 def main():
-    # Load data
+    st.title("KNN Regression: Model Complexity & Selection")
+
+    # Load and split data
     data = load_diabetes()
     X, y = data.data, data.target
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
 
-    # Split train/test
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.3, random_state=42
+    # Display model description
+    st.header("1. Model Implementation")
+    st.markdown("We implemented a custom `KnnRegressor` using `KDTree` for efficient neighbor lookups.")
+    st.code(
+        "class KnnRegressor: ...", language='python'
     )
 
-    # Evaluate range of k
+    # Cross-validation evaluation
+    st.header("2. Cross-Validation Results")
     k_vals = list(range(1, 31))
-    summary = evaluate_knn_range(X_train, y_train, k_vals, cv_splits=5, random_state=42)
-    plot_cv_results(summary)
+    df_cv = evaluate_knn_range(X_train, y_train, k_vals, cv_splits=5, random_state=42)
+    st.subheader("Error Summary Table")
+    st.dataframe(df_cv.set_index('k'))
 
-    # Fit KNN with best k via internal CV
+    # Plot errors
+    st.subheader("Error vs. k Plot")
+    fig = plot_cv_results(df_cv)
+    st.pyplot(fig)
+
+    # Automatic k selection
+    st.header("3. Automatic k Selection")
     knn_cv = KnnRegressorCV(ks=k_vals, cv_splits=5, random_state=42).fit(X_train, y_train)
-    y_pred_test = knn_cv.predict(X_test)
+    st.write(f"**Best k selected:** {knn_cv.best_k_}")
+    y_pred = knn_cv.predict(X_test)
+    test_mse = mean_squared_error(y_test, y_pred)
+    st.write(f"**Test MSE with k={knn_cv.best_k_}:** {test_mse:.4f}")
 
-    print(f"Best k selected: {knn_cv.best_k_}")
-    print(f"Test MSE with k={knn_cv.best_k_}: {mean_squared_error(y_test, y_pred_test):.4f}")
-
+    # Interpretation
+    st.header("4. Interpretation")
+    st.markdown(
+        "- Small k → low training error but high test error (overfitting)."
+        "  Medium k → balanced. Large k → underfitting."
+    )
 
 if __name__ == '__main__':
     main()
-
